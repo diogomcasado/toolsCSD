@@ -10,18 +10,12 @@
 
 <header>
   <div>
-    <h1>toolsCSD</h1>
-    <div style="display: flex;justify-content: center; align-items: center; text-align: center;">
-      <a class="github-button" href="https://github.com/diogomcasado"
-          data-color-scheme="no-preference: dark_dimmed; light: dark_dimmed; dark: dark_dimmed;" data-size="large"
-          aria-label="Follow @diogomcasado on GitHub">Follow @diogomcasado</a>
-    </div>
+    <h1><a href="https://github.com/diogomcasado/toolsCSD" class="site-title-link">toolsCSD</a></h1>
   </div>
   <button class="theme-toggle" id="themeToggle" title="Alternar tema" aria-label="Alternar tema claro/escuro">
     <span class="icon" id="themeIcon">🌙</span>
   </button>
 </header>
-<script async defer src="https://buttons.github.io/buttons.js"></script>
 
 <nav class="tabs">
   <button class="tab-btn active" data-tab="password">Passwords</button>
@@ -94,6 +88,7 @@
 
       <div class="actions-row">
         <button class="btn-primary" id="generateBtn">Gerar Password</button>
+        <button class="icon-btn mobile-copy-btn" id="copyBtnMobile" title="Copiar">📋</button>
         <div class="qty-row">
           <label for="qtyInput">Gerar várias:</label>
           <input type="number" id="qtyInput" min="1" max="20" value="1">
@@ -300,7 +295,7 @@
     <!-- QR CODE GENERATOR -->
     <section id="qr" class="tool-page">
       <label class="field-label" for="qrText">Texto ou URL</label>
-      <textarea class="textarea-field" id="qrText" placeholder="https://exemplo.com ou qualquer texto">https://example.com</textarea>
+      <textarea class="textarea-field" id="qrText" placeholder="https://exemplo.com ou qualquer texto">https://github.com/diogomcasado/toolsCSD</textarea>
 
       <div class="qr-options-grid">
         <div class="cron-field">
@@ -344,6 +339,16 @@
 
   </div>
 </main>
+
+<footer>
+  <a class="github-button" href="https://github.com/diogomcasado"
+      data-color-scheme="no-preference: dark_dimmed; light: dark_dimmed; dark: dark_dimmed;" data-size="large"
+      aria-label="Follow @diogomcasado on GitHub">Follow @diogomcasado</a>
+  <a class="github-button" href="https://github.com/diogomcasado/toolsCSD"
+      data-color-scheme="no-preference: dark_dimmed; light: dark_dimmed; dark: dark_dimmed;" data-icon="octicon-eye" data-size="large"
+      aria-label="Ver diogomcasado/toolsCSD no GitHub">diogomcasado/toolsCSD</a>
+</footer>
+<script async defer src="https://buttons.github.io/buttons.js"></script>
 
 <div class="toast" id="toast">Copiado!</div>
 

@@ -317,8 +317,25 @@ function showToast(msg) {
   showToast._t = setTimeout(() => toast.classList.remove('show'), 1400);
 }
 
-function copyToClipboard(text) {
-  navigator.clipboard.writeText(text).then(() => showToast('Copiado!'));
+function flashCopied(btn) {
+  if (!btn || btn.dataset.flashing) return;
+  btn.dataset.flashing = '1';
+  const original = btn.textContent;
+  const isIcon = btn.classList.contains('icon-btn');
+  btn.textContent = isIcon ? '✓' : '✓ Copiado';
+  btn.classList.add('copied');
+  setTimeout(() => {
+    btn.textContent = original;
+    btn.classList.remove('copied');
+    delete btn.dataset.flashing;
+  }, 1100);
+}
+
+function copyToClipboard(text, btn) {
+  navigator.clipboard.writeText(text).then(() => {
+    showToast('Copiado!');
+    if (btn) flashCopied(btn);
+  });
 }
 
 function refreshMain() {
@@ -361,7 +378,7 @@ function renderBatch() {
     span.textContent = pw;
     const btn = document.createElement('button');
     btn.textContent = 'Copiar';
-    btn.addEventListener('click', () => copyToClipboard(pw));
+    btn.addEventListener('click', () => copyToClipboard(pw, btn));
     item.appendChild(span);
     item.appendChild(btn);
     batchList.appendChild(item);
@@ -380,8 +397,11 @@ lengthRange.addEventListener('input', () => {
 document.getElementById('generateBtn').addEventListener('click', renderBatch);
 document.getElementById('regenBtn').addEventListener('click', renderBatch);
 qtyInput.addEventListener('change', renderBatch);
-document.getElementById('copyBtn').addEventListener('click', () => {
-  if (pwField.value) copyToClipboard(pwField.value);
+document.getElementById('copyBtn').addEventListener('click', (e) => {
+  if (pwField.value) copyToClipboard(pwField.value, e.currentTarget);
+});
+document.getElementById('copyBtnMobile').addEventListener('click', (e) => {
+  if (pwField.value) copyToClipboard(pwField.value, e.currentTarget);
 });
 
 // initial generation
@@ -426,8 +446,8 @@ document.getElementById('b64ConvertBtn').addEventListener('click', () => {
   }
 });
 
-document.getElementById('b64CopyBtn').addEventListener('click', () => {
-  if (b64Output.value) copyToClipboard(b64Output.value);
+document.getElementById('b64CopyBtn').addEventListener('click', (e) => {
+  if (b64Output.value) copyToClipboard(b64Output.value, e.currentTarget);
 });
 
 // ---------- Hash generator ----------
@@ -453,7 +473,7 @@ async function updateHashes() {
 document.querySelectorAll('#hashList button').forEach(btn => {
   btn.addEventListener('click', () => {
     const value = document.querySelector(`.hash-value[data-algo="${btn.dataset.algo}"]`).textContent;
-    if (value) copyToClipboard(value);
+    if (value) copyToClipboard(value, btn);
   });
 });
 
@@ -586,8 +606,8 @@ document.getElementById('jsonMinifyBtn').addEventListener('click', () => {
   withParsedJson(parsed => JSON.stringify(parsed));
 });
 
-document.getElementById('jsonCopyBtn').addEventListener('click', () => {
-  if (jsonOutput.value) copyToClipboard(jsonOutput.value);
+document.getElementById('jsonCopyBtn').addEventListener('click', (e) => {
+  if (jsonOutput.value) copyToClipboard(jsonOutput.value, e.currentTarget);
 });
 
 // ---------- URL encoder/decoder ----------
@@ -611,8 +631,8 @@ document.getElementById('urlConvertBtn').addEventListener('click', () => {
   }
 });
 
-document.getElementById('urlCopyBtn').addEventListener('click', () => {
-  if (urlOutput.value) copyToClipboard(urlOutput.value);
+document.getElementById('urlCopyBtn').addEventListener('click', (e) => {
+  if (urlOutput.value) copyToClipboard(urlOutput.value, e.currentTarget);
 });
 
 // ---------- UUID generator ----------
@@ -643,7 +663,7 @@ function renderUuidBatch() {
     span.textContent = value;
     const btn = document.createElement('button');
     btn.textContent = 'Copiar';
-    btn.addEventListener('click', () => copyToClipboard(value));
+    btn.addEventListener('click', () => copyToClipboard(value, btn));
     item.appendChild(span);
     item.appendChild(btn);
     uuidBatchList.appendChild(item);
@@ -655,8 +675,8 @@ document.getElementById('uuidRegenBtn').addEventListener('click', renderUuidBatc
 uuidQty.addEventListener('change', renderUuidBatch);
 uuidUpper.addEventListener('change', renderUuidBatch);
 uuidNoDashes.addEventListener('change', renderUuidBatch);
-document.getElementById('uuidCopyBtn').addEventListener('click', () => {
-  if (uuidField.value) copyToClipboard(uuidField.value);
+document.getElementById('uuidCopyBtn').addEventListener('click', (e) => {
+  if (uuidField.value) copyToClipboard(uuidField.value, e.currentTarget);
 });
 renderUuidBatch();
 
@@ -759,7 +779,7 @@ hexInput.addEventListener('change', () => {
   });
 });
 
-document.getElementById('hexCopyBtn').addEventListener('click', () => copyToClipboard(hexInput.value));
+document.getElementById('hexCopyBtn').addEventListener('click', (e) => copyToClipboard(hexInput.value, e.currentTarget));
 
 applyColor(hexToRgb('#7c5cff'), 'init');
 
@@ -978,8 +998,8 @@ document.querySelectorAll('.preset-btn').forEach(btn => {
   });
 });
 
-document.getElementById('cronCopyBtn').addEventListener('click', () => {
-  if (cronExpression.value) copyToClipboard(cronExpression.value);
+document.getElementById('cronCopyBtn').addEventListener('click', (e) => {
+  if (cronExpression.value) copyToClipboard(cronExpression.value, e.currentTarget);
 });
 
 syncCronFieldsFromExpression();
