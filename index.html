@@ -27,6 +27,8 @@
   <button class="tab-btn" data-tab="color">Cores</button>
   <button class="tab-btn" data-tab="cron">Cron</button>
   <button class="tab-btn" data-tab="qr">QR Code</button>
+  <button class="tab-btn" data-tab="meta">Metadados</button>
+  <button class="tab-btn" data-tab="compress">Comprimir</button>
 </nav>
 
 <main>
@@ -334,6 +336,122 @@
 
       <div class="actions-row">
         <button class="btn-primary" id="qrDownloadBtn">Descarregar PNG</button>
+      </div>
+    </section>
+
+
+    <!-- IMAGE METADATA CLEANER -->
+    <section id="meta" class="tool-page">
+      <div class="meta-intro">Remove EXIF, GPS, XMP e comentários das imagens. Tudo corre no browser — nenhum ficheiro é enviado para lado nenhum.</div>
+
+      <div class="dropzone" id="metaDrop" tabindex="0" role="button" aria-label="Escolher imagens para limpar">
+        <div class="dropzone-icon">🖼️</div>
+        <div class="dropzone-text">Arrasta imagens para aqui ou <span class="dropzone-link">escolhe ficheiros</span></div>
+        <div class="dropzone-hint">JPEG, PNG e WebP são limpos sem recompressão · HEIC e outros formatos são reconvertidos</div>
+        <input type="file" id="metaInput" accept="image/*,.heic,.heif" multiple hidden>
+      </div>
+
+      <div class="options-grid" style="margin: 18px 0 0;">
+        <label class="checkbox-row">
+          <input type="checkbox" id="metaKeepIcc" checked>
+          Manter perfil de cor (ICC)
+        </label>
+        <label class="checkbox-row">
+          <input type="checkbox" id="metaFixOrientation" checked>
+          Corrigir orientação (recodifica se preciso)
+        </label>
+      </div>
+
+      <div class="error-box" id="metaError"></div>
+
+      <div class="actions-row" id="metaActions" hidden>
+        <button class="btn-primary" id="metaDownloadAll">Descarregar tudo</button>
+        <button class="icon-btn" id="metaClearBtn">Limpar lista</button>
+      </div>
+
+      <div class="meta-results" id="metaResults"></div>
+    </section>
+
+
+    <!-- IMAGE COMPRESSOR -->
+    <section id="compress" class="tool-page">
+      <div class="meta-intro">Reduz o peso de uma imagem sem nada sair do browser — mexe na qualidade, no tamanho e no formato e vê logo o resultado.</div>
+
+      <div class="dropzone" id="cmpDrop" tabindex="0" role="button" aria-label="Escolher imagem para comprimir">
+        <div class="dropzone-icon">🗜️</div>
+        <div class="dropzone-text">Arrasta uma imagem para aqui ou <span class="dropzone-link">escolhe um ficheiro</span></div>
+        <div class="dropzone-hint">JPEG, PNG, WebP e HEIC · recodificar também deixa cair todos os metadados</div>
+        <input type="file" id="cmpInput" accept="image/*,.heic,.heif" hidden>
+      </div>
+
+      <div class="cmp-controls" id="cmpControls" hidden>
+        <div class="length-row">
+          <label for="cmpQuality">Qualidade</label>
+          <input type="range" id="cmpQuality" min="10" max="100" value="80">
+          <span class="length-value" id="cmpQualityValue">80</span>
+        </div>
+
+        <div class="cmp-options-grid">
+          <div class="cron-field">
+            <label for="cmpFormat">Formato</label>
+            <select id="cmpFormat" class="select-field"></select>
+          </div>
+          <div class="cron-field">
+            <label for="cmpMaxWidth">Largura máxima</label>
+            <select id="cmpMaxWidth" class="select-field">
+              <option value="0" selected>Manter original</option>
+              <option value="3840">3840 px</option>
+              <option value="2560">2560 px</option>
+              <option value="1920">1920 px</option>
+              <option value="1280">1280 px</option>
+              <option value="1024">1024 px</option>
+              <option value="800">800 px</option>
+              <option value="640">640 px</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="cmp-hint" id="cmpHint"></div>
+      </div>
+
+      <div class="error-box" id="cmpError"></div>
+
+      <div class="cmp-compare" id="cmpCompare" hidden>
+        <div class="cmp-viewer" id="cmpViewer" title="Roda do rato para zoom · arrasta para mover ou para deslizar a divisória">
+          <div class="cmp-layer" id="cmpLayerResult"></div>
+          <div class="cmp-layer cmp-layer-top" id="cmpLayerOriginal"></div>
+          <span class="cmp-tag cmp-tag-left">Original</span>
+          <span class="cmp-tag cmp-tag-right">Resultado</span>
+          <div class="cmp-handle" id="cmpHandle"><span class="cmp-grip">⇄</span></div>
+        </div>
+
+        <div class="cmp-viewer-bar">
+          <input type="range" id="cmpSplit" min="0" max="100" value="50" aria-label="Dividir entre original e resultado">
+          <select id="cmpZoom" class="select-field cmp-zoom" aria-label="Zoom">
+            <option value="fit" selected>Ajustar</option>
+            <option value="1">100%</option>
+            <option value="2">200%</option>
+            <option value="4">400%</option>
+          </select>
+        </div>
+
+        <div class="cmp-legend">
+          <div class="cmp-side">
+            <span class="cmp-side-title">Original</span>
+            <span class="cmp-side-meta" id="cmpOriginalMeta"></span>
+          </div>
+          <div class="cmp-side">
+            <span class="cmp-side-title">Resultado</span>
+            <span class="cmp-side-meta" id="cmpResultMeta"></span>
+          </div>
+        </div>
+      </div>
+
+      <div class="cmp-summary" id="cmpSummary" hidden></div>
+
+      <div class="actions-row" id="cmpActions" hidden>
+        <button class="btn-primary" id="cmpDownloadBtn">Descarregar imagem</button>
+        <button class="icon-btn" id="cmpResetBtn">Escolher outra</button>
       </div>
     </section>
 

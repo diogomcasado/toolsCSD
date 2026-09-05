@@ -577,6 +577,10 @@
     min-height: 1.2em;
   }
 
+  .error-box.is-info {
+    color: var(--text-dim);
+  }
+
   .hash-list {
     display: flex;
     flex-direction: column;
@@ -832,6 +836,427 @@
 
   @media (max-width: 640px) {
     .qr-options-grid { grid-template-columns: repeat(2, 1fr); }
+  }
+
+  /* Image metadata cleaner */
+  .meta-intro {
+    color: var(--text-dim);
+    font-size: 0.9rem;
+    margin-bottom: 16px;
+    transition: color 0.32s ease;
+  }
+
+  .dropzone {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+    padding: 32px 20px;
+    background: var(--bg-alt);
+    border: 2px dashed var(--border);
+    border-radius: var(--radius);
+    cursor: pointer;
+    text-align: center;
+    transition: background-color 0.32s ease, border-color 0.2s ease, box-shadow 0.2s ease;
+  }
+
+  .dropzone:hover,
+  .dropzone:focus-visible,
+  .dropzone.is-over {
+    border-color: var(--accent);
+    box-shadow: 0 2px 16px var(--accent-glow);
+    outline: none;
+  }
+
+  .dropzone.is-busy {
+    opacity: 0.6;
+    pointer-events: none;
+  }
+
+  .dropzone-icon {
+    font-size: 1.8rem;
+  }
+
+  .dropzone-text {
+    color: var(--text);
+    font-size: 0.95rem;
+  }
+
+  .dropzone-link {
+    color: var(--accent-hover);
+    font-weight: 600;
+  }
+
+  .dropzone-hint {
+    color: var(--text-dim);
+    font-size: 0.78rem;
+  }
+
+  /* display:flex/grid nas regras acima anula o atributo hidden */
+  [hidden] {
+    display: none !important;
+  }
+
+  .meta-results {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    margin-top: 20px;
+  }
+
+  .meta-item {
+    display: flex;
+    align-items: flex-start;
+    gap: 14px;
+    padding: 12px;
+    background: var(--bg-alt);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    transition: background-color 0.32s ease, border-color 0.32s ease;
+  }
+
+  .meta-thumb {
+    width: 64px;
+    height: 64px;
+    object-fit: cover;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    flex-shrink: 0;
+    background: var(--panel);
+  }
+
+  .meta-info {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .meta-name {
+    font-weight: 600;
+    font-size: 0.92rem;
+    word-break: break-all;
+  }
+
+  .meta-sizes {
+    color: var(--text-dim);
+    font-size: 0.82rem;
+    margin-top: 2px;
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  }
+
+  .meta-badges {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 8px;
+  }
+
+  .meta-badge {
+    font-size: 0.72rem;
+    font-weight: 600;
+    padding: 3px 8px;
+    border-radius: 999px;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    color: var(--text-dim);
+  }
+
+  .meta-badge.is-gps {
+    color: var(--bad);
+    border-color: var(--bad);
+  }
+
+  .meta-badge.is-clean {
+    color: var(--good);
+    border-color: var(--good);
+  }
+
+  .meta-details {
+    margin-top: 8px;
+    font-size: 0.82rem;
+  }
+
+  .meta-details summary {
+    cursor: pointer;
+    color: var(--accent-hover);
+  }
+
+  .meta-group {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 10px;
+    padding-top: 8px;
+    border-top: 1px solid var(--border);
+    font-size: 0.72rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--text-dim);
+    transition: color 0.32s ease, border-color 0.32s ease;
+  }
+
+  .meta-group:first-of-type {
+    border-top: none;
+    padding-top: 0;
+  }
+
+  .meta-group.is-gps {
+    color: var(--bad);
+  }
+
+  .meta-kv {
+    display: grid;
+    grid-template-columns: minmax(90px, auto) 1fr;
+    gap: 4px 12px;
+    margin-top: 6px;
+  }
+
+  .meta-kv-key {
+    color: var(--text-dim);
+  }
+
+  .meta-kv-val {
+    word-break: break-word;
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    font-size: 0.78rem;
+  }
+
+  .meta-note {
+    margin-top: 8px;
+    font-size: 0.8rem;
+    color: var(--warn);
+  }
+
+  .meta-dl {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    color: var(--text);
+    padding: 8px 12px;
+    font-family: inherit;
+    font-size: 0.82rem;
+    cursor: pointer;
+    flex-shrink: 0;
+    transition: border-color 0.2s ease, color 0.2s ease;
+  }
+
+  .meta-dl:hover {
+    border-color: var(--accent);
+    color: var(--accent-hover);
+  }
+
+  @media (max-width: 560px) {
+    .meta-item {
+      flex-wrap: wrap;
+    }
+
+    .meta-dl {
+      width: 100%;
+    }
+  }
+
+  /* Image compressor */
+  .cmp-controls {
+    margin-top: 20px;
+  }
+
+  .cmp-options-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 14px;
+    margin-top: 16px;
+  }
+
+  .cmp-hint {
+    margin-top: 10px;
+    font-size: 0.8rem;
+    color: var(--warn);
+    min-height: 1.1em;
+  }
+
+  .cmp-compare {
+    margin-top: 20px;
+  }
+
+  .cmp-viewer {
+    position: relative;
+    height: clamp(300px, 60vh, 640px);
+    background: var(--bg-alt);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    overflow: hidden;
+    touch-action: none;
+    user-select: none;
+    cursor: ew-resize;
+    transition: background-color 0.32s ease, border-color 0.32s ease;
+  }
+
+  /* as duas camadas partilham background-size e background-position, por isso
+     alinham ao pixel; a de cima só mostra a largura que a divisória deixa */
+  .cmp-layer {
+    position: absolute;
+    inset: 0;
+    background-repeat: no-repeat;
+  }
+
+  .cmp-layer-top {
+    width: 50%;
+    border-right: 2px solid var(--accent);
+  }
+
+  .cmp-viewer.is-zoomed {
+    cursor: grab;
+  }
+
+  .cmp-viewer.is-panning {
+    cursor: grabbing;
+  }
+
+  .cmp-tag {
+    position: absolute;
+    top: 10px;
+    padding: 3px 9px;
+    border-radius: 999px;
+    background: rgba(10, 12, 24, 0.6);
+    color: #fff;
+    font-size: 0.72rem;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    pointer-events: none;
+  }
+
+  .cmp-tag-left {
+    left: 10px;
+  }
+
+  .cmp-tag-right {
+    right: 10px;
+  }
+
+  .cmp-handle {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 50%;
+    width: 40px;
+    margin-left: -20px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: ew-resize;
+  }
+
+  .cmp-grip {
+    width: 34px;
+    height: 34px;
+    border-radius: 50%;
+    background: var(--accent-grad);
+    color: #fff;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.95rem;
+    box-shadow: 0 2px 12px var(--accent-glow);
+  }
+
+  .cmp-viewer-bar {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-top: 12px;
+  }
+
+  .cmp-viewer-bar input[type="range"] {
+    flex: 1;
+    accent-color: var(--accent);
+  }
+
+  .cmp-zoom {
+    width: auto;
+    flex: 0 0 auto;
+  }
+
+  .cmp-legend {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 14px;
+    margin-top: 12px;
+  }
+
+  .cmp-side {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+  }
+
+  .cmp-side-title {
+    font-size: 0.85rem;
+    font-weight: 600;
+  }
+
+  .cmp-side-meta {
+    font-size: 0.78rem;
+    color: var(--text-dim);
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    word-break: break-word;
+  }
+
+  .cmp-summary {
+    margin-top: 18px;
+    padding: 12px 14px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--bg-alt);
+    font-size: 0.9rem;
+    font-weight: 600;
+    text-align: center;
+    transition: background-color 0.32s ease, border-color 0.32s ease, color 0.32s ease;
+  }
+
+  .cmp-summary.is-working {
+    color: var(--text-dim);
+    font-weight: 500;
+  }
+
+  .cmp-summary.is-smaller {
+    color: var(--good);
+    border-color: var(--good);
+  }
+
+  .cmp-summary.is-bigger {
+    color: var(--warn);
+    border-color: var(--warn);
+  }
+
+  .cmp-controls input[type="range"]:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+  }
+
+  #compress .actions-row {
+    margin-top: 18px;
+  }
+
+  /* aqui o botão secundário é texto e não ícone: acompanha a altura do primário */
+  #compress .actions-row,
+  #meta .actions-row {
+    align-items: stretch;
+  }
+
+  #cmpResetBtn,
+  #metaClearBtn {
+    font-size: 0.95rem;
+  }
+
+  @media (max-width: 560px) {
+    .cmp-legend {
+      grid-template-columns: 1fr;
+    }
+
+    .cmp-viewer {
+      height: clamp(220px, 42vh, 360px);
+    }
   }
 
   .toast {

@@ -1074,3 +1074,1063 @@ document.getElementById('qrDownloadBtn').addEventListener('click', () => {
 });
 
 renderQrCode();
+
+// ---------- HEIC/HEIF ----------
+// Fora do Safari nenhum browser abre HEIC, por isso o libheif vem do CDN — mas só
+// na primeira vez que aparece um ficheiro destes. A imagem nunca sai do dispositivo.
+const HEIC_DECODER_URL = 'https://cdn.jsdelivr.net/npm/libheif-js@1.23.2/libheif-wasm/libheif-bundle.js';
+let heicDecoderPromise = null;
+
+function isHeicFile(file) {
+  return /^image\/hei[cf]/i.test(file.type) || /\.(heic|heif)$/i.test(file.name);
+}
+
+function loadHeicDecoder() {
+  if (heicDecoderPromise) return heicDecoderPromise;
+
+  heicDecoderPromise = new Promise((resolve, reject) => {
+    const script = document.createElement('script');
+    script.src = HEIC_DECODER_URL;
+    script.onload = () => resolve(window.libheif);
+    script.onerror = () => {
+      script.remove();
+      reject(new Error('não foi possível descarregar o descodificador HEIC'));
+    };
+    document.head.appendChild(script);
+  }).then(async lib => {
+    // o bundle wasm exporta uma fábrica; a versão em JS puro já vem montada
+    let api = typeof lib === 'function' ? lib() : lib;
+    if (api && typeof api.then === 'function') api = await api;
+    if (!api || !api.HeifDecoder) throw new Error('descodificador HEIC inválido');
+    return api;
+  }).catch(e => {
+    heicDecoderPromise = null; // sem rede agora, talvez à próxima
+    throw e;
+  });
+
+  return heicDecoderPromise;
+}
+
+async function decodeHeicToCanvas(file) {
+  const heif = await loadHeicDecoder();
+  const images = new heif.HeifDecoder().decode(new Uint8Array(await file.arrayBuffer()));
+  if (!images || !images.length) throw new Error('ficheiro HEIC sem imagens');
+
+  const image = images[0];
+  const canvas = document.createElement('canvas');
+  canvas.width = image.get_width();
+  canvas.height = image.get_height();
+  const ctx = canvas.getContext('2d');
+  const imageData = ctx.createImageData(canvas.width, canvas.height);
+  await new Promise((resolve, reject) => {
+    image.display(imageData, data => (data ? resolve(data) : reject(new Error('erro a descodificar o HEIC'))));
+  });
+  ctx.putImageData(imageData, 0, 0);
+  return canvas;
+}
+
+// Devolve um ImageBitmap ou um canvas — para o drawImage dá no mesmo
+async function decodeImageFile(file) {
+  if (typeof createImageBitmap === 'function') {
+    try {
+      return await createImageBitmap(file, { imageOrientation: 'from-image' });
+    } catch (e) {
+      if (!isHeicFile(file)) throw new Error('formato não suportado pelo browser');
+    }
+  } else if (!isHeicFile(file)) {
+    throw new Error('formato não suportado pelo browser');
+  }
+  return decodeHeicToCanvas(file);
+}
+
+// ---------- Image metadata cleaner ----------
+const metaDrop = document.getElementById('metaDrop');
+const metaInput = document.getElementById('metaInput');
+const metaKeepIcc = document.getElementById('metaKeepIcc');
+const metaFixOrientation = document.getElementById('metaFixOrientation');
+const metaError = document.getElementById('metaError');
+const metaResults = document.getElementById('metaResults');
+const metaActions = document.getElementById('metaActions');
+
+const metaCleaned = [];
+
+function formatBytes(n) {
+  if (n < 1024) return n + ' B';
+  if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' KB';
+  return (n / (1024 * 1024)).toFixed(2) + ' MB';
+}
+
+// --- EXIF (TIFF) parsing, apenas o suficiente para mostrar o que está a ser removido ---
+const EXIF_TYPE_SIZE = { 1: 1, 2: 1, 3: 2, 4: 4, 5: 8, 6: 1, 7: 1, 8: 2, 9: 4, 10: 8, 11: 4, 12: 8 };
+
+// Cada etiqueta traz o grupo onde aparece na lista do que foi removido
+const IFD0_TAGS = {
+  0x0112: { label: 'Orientação', group: 'Outros' },
+  0x010f: { label: 'Marca', group: 'Dispositivo' },
+  0x0110: { label: 'Modelo', group: 'Dispositivo' },
+  0x0131: { label: 'Software', group: 'Dispositivo' },
+  0x0132: { label: 'Data', group: 'Outros' },
+  0x013b: { label: 'Autor', group: 'Outros' },
+  0x8298: { label: 'Copyright', group: 'Outros' },
+  0x010e: { label: 'Descrição', group: 'Outros' }
+};
+
+const EXIF_IFD_TAGS = {
+  0x9003: { label: 'Data original', group: 'Outros' },
+  0x9004: { label: 'Data de digitalização', group: 'Outros' },
+  0xa434: { label: 'Lente', group: 'Dispositivo' },
+  0x8827: { label: 'ISO', group: 'Dispositivo' },
+  0xa430: { label: 'Dono da câmara', group: 'Dispositivo' },
+  0xa431: { label: 'Nº de série', group: 'Dispositivo' },
+  0x9286: { label: 'Comentário', group: 'Outros' }
+};
+
+const META_GROUPS = [
+  { name: 'Localização', icon: '📍' },
+  { name: 'Dispositivo', icon: '📷' },
+  { name: 'Outros', icon: '📝' }
+];
+
+function readExifValue(dv, tiffStart, entry, little) {
+  const type = dv.getUint16(entry + 2, little);
+  const count = dv.getUint32(entry + 4, little);
+  const size = EXIF_TYPE_SIZE[type];
+  if (!size) return null;
+  const total = size * count;
+  const at = total <= 4 ? entry + 8 : tiffStart + dv.getUint32(entry + 8, little);
+  if (at < 0 || at + total > dv.byteLength) return null;
+
+  if (type === 2) {
+    let s = '';
+    for (let i = 0; i < count; i++) {
+      const c = dv.getUint8(at + i);
+      if (c === 0) break;
+      s += String.fromCharCode(c);
+    }
+    return s.trim();
+  }
+  if (type === 5 || type === 10) {
+    const vals = [];
+    for (let i = 0; i < count; i++) {
+      const num = type === 5 ? dv.getUint32(at + i * 8, little) : dv.getInt32(at + i * 8, little);
+      const den = type === 5 ? dv.getUint32(at + i * 8 + 4, little) : dv.getInt32(at + i * 8 + 4, little);
+      vals.push(den === 0 ? 0 : num / den);
+    }
+    return count === 1 ? vals[0] : vals;
+  }
+  if (type === 3) return dv.getUint16(at, little);
+  if (type === 4) return dv.getUint32(at, little);
+  if (type === 9) return dv.getInt32(at, little);
+  return null;
+}
+
+function readIfd(dv, ifdOffset, little, handler) {
+  if (ifdOffset < 0 || ifdOffset + 2 > dv.byteLength) return 0;
+  const count = dv.getUint16(ifdOffset, little);
+  for (let i = 0; i < count; i++) {
+    const entry = ifdOffset + 2 + i * 12;
+    if (entry + 12 > dv.byteLength) break;
+    handler(dv.getUint16(entry, little), entry);
+  }
+  return count;
+}
+
+function gpsToDecimal(parts, ref) {
+  if (!Array.isArray(parts) || parts.length < 3) return null;
+  const dec = parts[0] + parts[1] / 60 + parts[2] / 3600;
+  return (ref === 'S' || ref === 'W') ? -dec : dec;
+}
+
+// Devolve { fields, orientation, tagCount, hasGps, hasThumbnail }
+function parseExif(bytes, tiffStart) {
+  const info = { fields: [], orientation: 1, tagCount: 0, hasGps: false, hasThumbnail: false };
+  try {
+    const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    const byteOrder = dv.getUint16(tiffStart);
+    let little;
+    if (byteOrder === 0x4949) little = true;
+    else if (byteOrder === 0x4d4d) little = false;
+    else return info;
+    if (dv.getUint16(tiffStart + 2, little) !== 0x002a) return info;
+
+    const ifd0 = tiffStart + dv.getUint32(tiffStart + 4, little);
+    let exifPtr = 0;
+    let gpsPtr = 0;
+
+    info.tagCount += readIfd(dv, ifd0, little, (tag, entry) => {
+      if (tag === 0x8769) { exifPtr = tiffStart + readExifValue(dv, tiffStart, entry, little); return; }
+      if (tag === 0x8825) { gpsPtr = tiffStart + readExifValue(dv, tiffStart, entry, little); return; }
+      const meta = IFD0_TAGS[tag];
+      if (!meta) return;
+      const value = readExifValue(dv, tiffStart, entry, little);
+      if (value === null || value === '') return;
+      if (tag === 0x0112) { info.orientation = value; return; }
+      info.fields.push({ label: meta.label, group: meta.group, value: String(value) });
+    });
+
+    if (exifPtr > tiffStart) {
+      info.tagCount += readIfd(dv, exifPtr, little, (tag, entry) => {
+        const meta = EXIF_IFD_TAGS[tag];
+        if (!meta) return;
+        const value = readExifValue(dv, tiffStart, entry, little);
+        if (value === null || value === '') return;
+        if (tag === 0x9286 && typeof value !== 'string') return;
+        info.fields.push({ label: meta.label, group: meta.group, value: String(value) });
+      });
+    }
+
+    if (gpsPtr > tiffStart) {
+      const gps = {};
+      info.tagCount += readIfd(dv, gpsPtr, little, (tag, entry) => {
+        if (tag >= 0x0001 && tag <= 0x0006) gps[tag] = readExifValue(dv, tiffStart, entry, little);
+      });
+      const lat = gpsToDecimal(gps[0x0002], gps[0x0001]);
+      const lon = gpsToDecimal(gps[0x0004], gps[0x0003]);
+      if (lat !== null && lon !== null) {
+        info.hasGps = true;
+        info.fields.push({ label: 'Coordenadas', group: 'Localização', value: lat.toFixed(5) + ', ' + lon.toFixed(5) });
+        if (typeof gps[0x0006] === 'number') info.fields.push({ label: 'Altitude', group: 'Localização', value: gps[0x0006].toFixed(1) + ' m' });
+      } else if (Object.keys(gps).length) {
+        info.hasGps = true;
+      }
+    }
+
+    // O IFD1 guarda a miniatura embutida — uma cópia da foto em pequeno
+    const ifd1Ptr = ifd0 + 2 + dv.getUint16(ifd0, little) * 12;
+    if (ifd1Ptr + 4 <= dv.byteLength && dv.getUint32(ifd1Ptr, little) !== 0) info.hasThumbnail = true;
+  } catch (e) {
+    /* metadados que não conseguimos ler continuam a ser removidos */
+  }
+  return info;
+}
+
+function asciiAt(bytes, offset, length) {
+  let s = '';
+  for (let i = 0; i < length && offset + i < bytes.length; i++) s += String.fromCharCode(bytes[offset + i]);
+  return s;
+}
+
+function concatChunks(pieces) {
+  let total = 0;
+  pieces.forEach(p => { total += p.length; });
+  const out = new Uint8Array(total);
+  let at = 0;
+  pieces.forEach(p => { out.set(p, at); at += p.length; });
+  return out;
+}
+
+// --- Limpeza por formato: devolve { bytes, mime, removed, fields, orientation } ou null ---
+function stripJpeg(bytes, keepIcc) {
+  if (bytes[0] !== 0xff || bytes[1] !== 0xd8) return null;
+  const pieces = [bytes.subarray(0, 2)];
+  const removed = [];
+  const fields = [];
+  let orientation = 1;
+  let offset = 2;
+
+  while (offset < bytes.length) {
+    if (bytes[offset] !== 0xff) return null;
+    const marker = bytes[offset + 1];
+    if (marker === 0xff) { offset++; continue; }
+    if (marker === 0xd9) { pieces.push(bytes.subarray(offset, offset + 2)); break; }
+    if (marker === 0xda) {
+      // a partir daqui são dados da imagem; cortamos no EOI para deixar cair
+      // o que alguns telemóveis acrescentam no fim (2ª imagem, blocos próprios)
+      let scanEnd = bytes.length;
+      for (let i = offset + 2; i + 1 < bytes.length; i++) {
+        if (bytes[i] === 0xff && bytes[i + 1] === 0xd9) { scanEnd = i + 2; break; }
+      }
+      pieces.push(bytes.subarray(offset, scanEnd));
+      if (scanEnd < bytes.length) removed.push('Dados extra no fim do ficheiro');
+      break;
+    }
+    if (offset + 4 > bytes.length) return null;
+    const len = (bytes[offset + 2] << 8) | bytes[offset + 3];
+    const end = offset + 2 + len;
+    if (len < 2 || end > bytes.length) return null;
+
+    const isApp = marker >= 0xe0 && marker <= 0xef;
+    let drop = false;
+
+    if (isApp) {
+      const tag = asciiAt(bytes, offset + 4, 32);
+      if (marker === 0xe1 && tag.indexOf('Exif') === 0) {
+        drop = true;
+        const info = parseExif(bytes, offset + 10);
+        orientation = info.orientation || 1;
+        info.fields.forEach(f => fields.push(f));
+        removed.push('EXIF');
+        if (info.hasGps) removed.push('GPS');
+        if (info.hasThumbnail) removed.push('Miniatura');
+      } else if (marker === 0xe1 && tag.indexOf('http://ns.adobe.com/xap') === 0) {
+        drop = true;
+        removed.push('XMP');
+      } else if (marker === 0xe2 && tag.indexOf('ICC_PROFILE') === 0) {
+        drop = !keepIcc;
+        if (drop) removed.push('Perfil ICC');
+      } else if (marker === 0xed && tag.indexOf('Photoshop') === 0) {
+        drop = true;
+        removed.push('IPTC/Photoshop');
+      } else if (marker === 0xe0 && tag.indexOf('JFIF') === 0) {
+        drop = false; // densidade da imagem, sem dados pessoais
+      } else if (marker === 0xee && tag.indexOf('Adobe') === 0) {
+        drop = false; // necessário para interpretar as cores corretamente
+      } else {
+        drop = true;
+        removed.push('APP' + (marker - 0xe0));
+      }
+    } else if (marker === 0xfe) {
+      drop = true;
+      removed.push('Comentário');
+      const text = asciiAt(bytes, offset + 4, Math.min(len - 2, 120)).trim();
+      if (text) fields.push({ label: 'Comentário', group: 'Outros', value: text });
+    }
+
+    if (!drop) pieces.push(bytes.subarray(offset, end));
+    offset = end;
+  }
+
+  return { bytes: concatChunks(pieces), mime: 'image/jpeg', removed: removed, fields: fields, orientation: orientation };
+}
+
+const PNG_META_CHUNKS = ['tEXt', 'zTXt', 'iTXt', 'eXIf', 'tIME'];
+
+function readPngText(bytes, start, len, type) {
+  const raw = asciiAt(bytes, start, Math.min(len, 400));
+  const nul = raw.indexOf('\0');
+  if (nul < 1) return null;
+  const keyword = raw.slice(0, nul);
+  if (type === 'tEXt') return { label: keyword, group: 'Outros', value: raw.slice(nul + 1, nul + 200).trim() };
+  if (type === 'iTXt') {
+    // keyword \0 flagCompressão métodoCompressão idioma \0 palavraTraduzida \0 texto
+    if (bytes[start + nul + 1] !== 0) return { label: keyword, group: 'Outros', value: '(comprimido)' };
+    const parts = raw.slice(nul + 3).split('\0');
+    return { label: keyword, group: 'Outros', value: (parts[2] || '').trim().slice(0, 200) };
+  }
+  return { label: keyword, group: 'Outros', value: '(comprimido)' };
+}
+
+function stripPng(bytes, keepIcc) {
+  const sig = [137, 80, 78, 71, 13, 10, 26, 10];
+  for (let i = 0; i < 8; i++) if (bytes[i] !== sig[i]) return null;
+
+  const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const pieces = [bytes.subarray(0, 8)];
+  const removed = [];
+  const fields = [];
+  let offset = 8;
+
+  while (offset + 8 <= bytes.length) {
+    const len = dv.getUint32(offset);
+    const type = asciiAt(bytes, offset + 4, 4);
+    const end = offset + 12 + len;
+    if (end > bytes.length) return null;
+
+    let drop = false;
+    if (PNG_META_CHUNKS.indexOf(type) !== -1) {
+      drop = true;
+      if (type === 'eXIf') {
+        const info = parseExif(bytes, offset + 8);
+        info.fields.forEach(f => fields.push(f));
+        removed.push('EXIF');
+        if (info.hasGps) removed.push('GPS');
+      } else if (type === 'tIME') {
+        removed.push('Data de modificação');
+      } else {
+        removed.push('Texto ' + type);
+        const text = readPngText(bytes, offset + 8, len, type);
+        if (text) fields.push(text);
+      }
+    } else if (type === 'iCCP') {
+      drop = !keepIcc;
+      if (drop) removed.push('Perfil ICC');
+    }
+
+    if (!drop) pieces.push(bytes.subarray(offset, end));
+    offset = end;
+    if (type === 'IEND') break;
+  }
+
+  return { bytes: concatChunks(pieces), mime: 'image/png', removed: removed, fields: fields, orientation: 1 };
+}
+
+function stripWebp(bytes, keepIcc) {
+  if (asciiAt(bytes, 0, 4) !== 'RIFF' || asciiAt(bytes, 8, 4) !== 'WEBP') return null;
+
+  const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const body = [];
+  const removed = [];
+  const fields = [];
+  let offset = 12;
+
+  while (offset + 8 <= bytes.length) {
+    const fourcc = asciiAt(bytes, offset, 4);
+    const len = dv.getUint32(offset + 4, true);
+    if (offset + 8 + len > bytes.length) return null;
+    const end = offset + 8 + len + (len % 2); // os chunks têm padding para tamanho par
+
+    let drop = false;
+    if (fourcc === 'EXIF') {
+      drop = true;
+      const info = parseExif(bytes, offset + 8);
+      info.fields.forEach(f => fields.push(f));
+      removed.push('EXIF');
+      if (info.hasGps) removed.push('GPS');
+    } else if (fourcc === 'XMP ') {
+      drop = true;
+      removed.push('XMP');
+    } else if (fourcc === 'ICCP') {
+      drop = !keepIcc;
+      if (drop) removed.push('Perfil ICC');
+    }
+
+    if (!drop) {
+      const chunk = bytes.slice(offset, Math.min(end, bytes.length));
+      if (fourcc === 'VP8X' && chunk.length >= 9) {
+        // limpar os bits que anunciam ICC/EXIF/XMP no cabeçalho estendido
+        let flags = chunk[8];
+        flags &= ~0x08; // EXIF
+        flags &= ~0x04; // XMP
+        if (!keepIcc) flags &= ~0x20; // ICC
+        chunk[8] = flags;
+      }
+      body.push(chunk);
+    }
+    offset = end;
+  }
+
+  const payload = concatChunks(body);
+  const out = new Uint8Array(12 + payload.length);
+  out.set(bytes.subarray(0, 12));
+  out.set(payload, 12);
+  new DataView(out.buffer).setUint32(4, out.length - 8, true); // tamanho RIFF atualizado
+  return { bytes: out, mime: 'image/webp', removed: removed, fields: fields, orientation: 1 };
+}
+
+// Redesenhar num canvas remove todos os metadados, mas recomprime a imagem
+async function reencodeImage(file, mime) {
+  const source = await decodeImageFile(file);
+  const canvas = document.createElement('canvas');
+  canvas.width = source.width;
+  canvas.height = source.height;
+  canvas.getContext('2d').drawImage(source, 0, 0);
+  if (source.close) source.close();
+  // um HEIC é sempre uma fotografia: em PNG ficaria enorme
+  const type = mime || (isHeicFile(file) ? 'image/jpeg' : 'image/png');
+  const blob = await new Promise(res => canvas.toBlob(res, type, 0.92));
+  if (!blob) throw new Error('o browser não conseguiu gerar a imagem');
+  return { blob: blob, mime: type };
+}
+
+function cleanedName(name, mime) {
+  const ext = mime === 'image/jpeg' ? 'jpg' : mime === 'image/webp' ? 'webp' : 'png';
+  const base = name.replace(/\.[^.]+$/, '') || 'imagem';
+  return base + '-limpo.' + ext;
+}
+
+async function cleanImageFile(file) {
+  const keepIcc = metaKeepIcc.checked;
+  const bytes = new Uint8Array(await file.arrayBuffer());
+
+  const result = stripJpeg(bytes, keepIcc) || stripPng(bytes, keepIcc) || stripWebp(bytes, keepIcc);
+
+  if (result) {
+    let blob = new Blob([result.bytes], { type: result.mime });
+    let note = '';
+    if (result.orientation > 1 && metaFixOrientation.checked) {
+      try {
+        blob = (await reencodeImage(file, 'image/jpeg')).blob;
+        note = 'Recodificada para aplicar a rotação que estava guardada no EXIF.';
+      } catch (e) {
+        note = 'A etiqueta de orientação foi removida — a imagem pode aparecer rodada.';
+      }
+    } else if (result.orientation > 1) {
+      note = 'A etiqueta de orientação foi removida — a imagem pode aparecer rodada.';
+    }
+    return {
+      name: cleanedName(file.name, result.mime),
+      blob: blob,
+      originalSize: file.size,
+      removed: result.removed,
+      fields: result.fields,
+      note: note
+    };
+  }
+
+  const re = await reencodeImage(file, null); // rebenta com a razão certa se não der
+  return {
+    name: cleanedName(file.name, re.mime),
+    blob: re.blob,
+    originalSize: file.size,
+    removed: ['Todos os metadados'],
+    fields: [],
+    note: 'Formato sem limpeza direta: a imagem foi redesenhada como ' +
+      (re.mime === 'image/jpeg' ? 'JPEG' : 'PNG') + ', o que remove tudo mas altera o ficheiro.'
+  };
+}
+
+// --- Interface ---
+function downloadCleaned(entry) {
+  const link = document.createElement('a');
+  link.download = entry.name;
+  link.href = entry.url;
+  link.click();
+}
+
+function renderMetaItem(entry, file) {
+  const item = document.createElement('div');
+  item.className = 'meta-item';
+
+  const thumb = document.createElement('img');
+  thumb.className = 'meta-thumb';
+  thumb.alt = '';
+  thumb.src = entry.url;
+  item.appendChild(thumb);
+
+  const info = document.createElement('div');
+  info.className = 'meta-info';
+
+  const name = document.createElement('div');
+  name.className = 'meta-name';
+  name.textContent = file.name;
+  info.appendChild(name);
+
+  const diff = entry.originalSize - entry.blob.size;
+  const sizes = document.createElement('div');
+  sizes.className = 'meta-sizes';
+  sizes.textContent = formatBytes(entry.originalSize) + ' → ' + formatBytes(entry.blob.size) +
+    (diff > 0 ? ' (−' + formatBytes(diff) + ')' : diff < 0 ? ' (+' + formatBytes(-diff) + ')' : '');
+  info.appendChild(sizes);
+
+  const badges = document.createElement('div');
+  badges.className = 'meta-badges';
+  const unique = entry.removed.filter((v, i, a) => a.indexOf(v) === i);
+  if (!unique.length) {
+    const clean = document.createElement('span');
+    clean.className = 'meta-badge is-clean';
+    clean.textContent = 'Já não tinha metadados';
+    badges.appendChild(clean);
+  } else {
+    unique.forEach(label => {
+      const badge = document.createElement('span');
+      badge.className = 'meta-badge' + (label === 'GPS' ? ' is-gps' : '');
+      badge.textContent = label;
+      badges.appendChild(badge);
+    });
+  }
+  info.appendChild(badges);
+
+  if (entry.fields.length) {
+    const details = document.createElement('details');
+    details.className = 'meta-details';
+    const summary = document.createElement('summary');
+    summary.textContent = 'Ver o que foi removido (' + entry.fields.length + ')';
+    details.appendChild(summary);
+
+    META_GROUPS.forEach(group => {
+      const rows = entry.fields.filter(f => (f.group || 'Outros') === group.name);
+      if (!rows.length) return;
+
+      const title = document.createElement('div');
+      title.className = 'meta-group' + (group.name === 'Localização' ? ' is-gps' : '');
+      title.textContent = group.icon + ' ' + group.name;
+      details.appendChild(title);
+
+      const list = document.createElement('div');
+      list.className = 'meta-kv';
+      rows.forEach(f => {
+        const key = document.createElement('span');
+        key.className = 'meta-kv-key';
+        key.textContent = f.label;
+        const val = document.createElement('span');
+        val.className = 'meta-kv-val';
+        val.textContent = f.value;
+        list.appendChild(key);
+        list.appendChild(val);
+      });
+      details.appendChild(list);
+    });
+
+    info.appendChild(details);
+  }
+
+  if (entry.note) {
+    const note = document.createElement('div');
+    note.className = 'meta-note';
+    note.textContent = entry.note;
+    info.appendChild(note);
+  }
+
+  item.appendChild(info);
+
+  const dl = document.createElement('button');
+  dl.className = 'meta-dl';
+  dl.textContent = '⬇ Descarregar';
+  dl.addEventListener('click', () => downloadCleaned(entry));
+  item.appendChild(dl);
+
+  metaResults.appendChild(item);
+}
+
+async function handleMetaFiles(fileList) {
+  const files = Array.from(fileList).filter(f => f.type.indexOf('image/') === 0 || /\.(jpe?g|png|webp|gif|bmp|tiff?|avif|heic)$/i.test(f.name));
+  if (!files.length) {
+    metaError.textContent = 'Escolhe pelo menos um ficheiro de imagem.';
+    return;
+  }
+  metaError.className = 'error-box';
+  metaError.textContent = '';
+  metaDrop.classList.add('is-busy');
+
+  if (!heicDecoderPromise && files.some(isHeicFile)) {
+    metaError.className = 'error-box is-info';
+    metaError.textContent = 'A preparar o descodificador HEIC…';
+  }
+
+  const failed = [];
+  for (const file of files) {
+    try {
+      const entry = await cleanImageFile(file);
+      entry.url = URL.createObjectURL(entry.blob);
+      metaCleaned.push(entry);
+      renderMetaItem(entry, file);
+    } catch (e) {
+      failed.push(file.name + ' (' + e.message + ')');
+    }
+  }
+
+  metaDrop.classList.remove('is-busy');
+  metaActions.hidden = metaCleaned.length === 0;
+  metaError.className = 'error-box';
+  metaError.textContent = failed.length ? 'Não foi possível processar: ' + failed.join(', ') : '';
+  if (!failed.length) showToast(files.length > 1 ? 'Imagens limpas!' : 'Imagem limpa!');
+}
+
+metaDrop.addEventListener('click', () => metaInput.click());
+metaDrop.addEventListener('keydown', e => {
+  if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); metaInput.click(); }
+});
+metaInput.addEventListener('change', () => {
+  handleMetaFiles(metaInput.files);
+  metaInput.value = '';
+});
+
+['dragenter', 'dragover'].forEach(evt => {
+  metaDrop.addEventListener(evt, e => { e.preventDefault(); metaDrop.classList.add('is-over'); });
+});
+['dragleave', 'drop'].forEach(evt => {
+  metaDrop.addEventListener(evt, e => { e.preventDefault(); metaDrop.classList.remove('is-over'); });
+});
+metaDrop.addEventListener('drop', e => {
+  if (e.dataTransfer && e.dataTransfer.files.length) handleMetaFiles(e.dataTransfer.files);
+});
+
+document.getElementById('metaDownloadAll').addEventListener('click', () => {
+  metaCleaned.forEach((entry, i) => setTimeout(() => downloadCleaned(entry), i * 220));
+});
+
+document.getElementById('metaClearBtn').addEventListener('click', () => {
+  metaCleaned.forEach(entry => URL.revokeObjectURL(entry.url));
+  metaCleaned.length = 0;
+  metaResults.innerHTML = '';
+  metaError.textContent = '';
+  metaActions.hidden = true;
+});
+
+// ---------- Image compressor ----------
+const cmpDrop = document.getElementById('cmpDrop');
+const cmpInput = document.getElementById('cmpInput');
+const cmpControls = document.getElementById('cmpControls');
+const cmpQuality = document.getElementById('cmpQuality');
+const cmpQualityValue = document.getElementById('cmpQualityValue');
+const cmpFormat = document.getElementById('cmpFormat');
+const cmpMaxWidth = document.getElementById('cmpMaxWidth');
+const cmpHint = document.getElementById('cmpHint');
+const cmpError = document.getElementById('cmpError');
+const cmpCompare = document.getElementById('cmpCompare');
+const cmpViewer = document.getElementById('cmpViewer');
+const cmpLayerOriginal = document.getElementById('cmpLayerOriginal');
+const cmpLayerResult = document.getElementById('cmpLayerResult');
+const cmpHandle = document.getElementById('cmpHandle');
+const cmpSplit = document.getElementById('cmpSplit');
+const cmpZoom = document.getElementById('cmpZoom');
+const cmpOriginalMeta = document.getElementById('cmpOriginalMeta');
+const cmpResultMeta = document.getElementById('cmpResultMeta');
+const cmpSummary = document.getElementById('cmpSummary');
+const cmpActions = document.getElementById('cmpActions');
+
+const CMP_TYPES = [
+  { value: 'image/jpeg', label: 'JPEG (.jpg)', ext: 'jpg' },
+  { value: 'image/webp', label: 'WebP (.webp)', ext: 'webp' },
+  { value: 'image/avif', label: 'AVIF (.avif)', ext: 'avif' },
+  { value: 'image/png', label: 'PNG (.png)', ext: 'png' }
+];
+
+const CMP_LOSSY = ['image/jpeg', 'image/webp', 'image/avif'];
+
+let cmpSource = null;   // { file, bitmap, url }
+let cmpResult = null;   // { blob, url, width, height, type }
+let cmpTimer = null;
+let cmpRunId = 0;
+let cmpPan = { x: 0, y: 0 };
+let cmpDrag = null;
+let cmpView = null;        // enquadramento do último desenho, para o zoom saber onde está
+let cmpCustomZoom = 1;     // zoom feito à roda do rato, fora dos valores do menu
+let cmpZoomOption = null;
+
+// O browser só encoda alguns formatos — perguntamos-lhe quais antes de os oferecer
+function canEncode(type) {
+  const canvas = document.createElement('canvas');
+  canvas.width = 1;
+  canvas.height = 1;
+  return canvas.toDataURL(type).indexOf('data:' + type) === 0;
+}
+
+const cmpAvailable = CMP_TYPES.filter(t => canEncode(t.value));
+
+(function fillFormats() {
+  const keep = document.createElement('option');
+  keep.value = '';
+  keep.textContent = 'Manter formato';
+  cmpFormat.appendChild(keep);
+  cmpAvailable.forEach(t => {
+    const opt = document.createElement('option');
+    opt.value = t.value;
+    opt.textContent = t.label;
+    cmpFormat.appendChild(opt);
+  });
+})();
+
+function cmpTargetType() {
+  if (cmpFormat.value) return cmpFormat.value;
+  const source = cmpSource && cmpSource.file.type;
+  const known = cmpAvailable.filter(t => t.value === source)[0];
+  return known ? known.value : 'image/jpeg';
+}
+
+function cmpExtension(type) {
+  const known = CMP_TYPES.filter(t => t.value === type)[0];
+  return known ? known.ext : 'jpg';
+}
+
+function cmpTypeName(type) {
+  const known = CMP_TYPES.filter(t => t.value === type)[0];
+  return known ? known.label.split(' ')[0] : String(type).replace('image/', '').toUpperCase();
+}
+
+function cmpRelease() {
+  if (cmpSource && cmpSource.url) URL.revokeObjectURL(cmpSource.url);
+  if (cmpSource && cmpSource.bitmap && cmpSource.bitmap.close) cmpSource.bitmap.close();
+  if (cmpResult && cmpResult.url) URL.revokeObjectURL(cmpResult.url);
+  cmpSource = null;
+  cmpResult = null;
+}
+
+function cmpReset() {
+  clearTimeout(cmpTimer);
+  cmpRunId++;
+  cmpRelease();
+  cmpControls.hidden = true;
+  cmpCompare.hidden = true;
+  cmpSummary.hidden = true;
+  cmpActions.hidden = true;
+  cmpError.textContent = '';
+  cmpHint.textContent = '';
+  cmpLayerOriginal.style.backgroundImage = '';
+  cmpLayerResult.style.backgroundImage = '';
+  cmpSplit.value = 50;
+  if (cmpZoomOption) {
+    cmpZoom.removeChild(cmpZoomOption);
+    cmpZoomOption = null;
+  }
+  cmpZoom.value = 'fit';
+  cmpPan = { x: 0, y: 0 };
+  cmpView = null;
+  cmpInput.value = '';
+}
+
+async function loadCompressSource(file) {
+  if (!file) return;
+  if (file.type.indexOf('image/') !== 0 && !/\.(jpe?g|png|webp|gif|bmp|avif|heic|heif)$/i.test(file.name)) {
+    cmpError.textContent = 'Escolhe um ficheiro de imagem.';
+    return;
+  }
+
+  cmpReset();
+  cmpDrop.classList.add('is-busy');
+
+  if (isHeicFile(file) && !heicDecoderPromise) {
+    cmpSummary.hidden = false;
+    cmpSummary.className = 'cmp-summary is-working';
+    cmpSummary.textContent = 'A preparar o descodificador HEIC…';
+  }
+
+  let source;
+  try {
+    source = await decodeImageFile(file);
+  } catch (e) {
+    cmpDrop.classList.remove('is-busy');
+    cmpSummary.hidden = true;
+    cmpError.textContent = e.message === 'formato não suportado pelo browser'
+      ? 'O browser não conseguiu abrir esta imagem.'
+      : 'Não deu para abrir a imagem: ' + e.message + '.';
+    return;
+  }
+
+  // o browser não mostra um HEIC diretamente, por isso a pré-visualização
+  // do original vem dos pixels já descodificados
+  const previewUrl = source instanceof HTMLCanvasElement
+    ? await new Promise(res => source.toBlob(b => res(URL.createObjectURL(b)), 'image/png'))
+    : URL.createObjectURL(file);
+
+  cmpSource = { file: file, bitmap: source, url: previewUrl };
+  cmpLayerOriginal.style.backgroundImage = 'url("' + cmpSource.url + '")';
+  cmpOriginalMeta.textContent = formatBytes(file.size) + ' · ' + source.width + '×' + source.height +
+    ' · ' + cmpTypeName(file.type || (isHeicFile(file) ? 'image/heic' : 'image/jpeg'));
+
+  cmpDrop.classList.remove('is-busy');
+  cmpControls.hidden = false;
+  cmpCompare.hidden = false;
+  cmpActions.hidden = false;
+  runCompress();
+}
+
+function cmpTargetSize() {
+  const max = parseInt(cmpMaxWidth.value, 10);
+  const w = cmpSource.bitmap.width;
+  const h = cmpSource.bitmap.height;
+  if (!max || w <= max) return { width: w, height: h };
+  return { width: max, height: Math.max(1, Math.round(h * (max / w))) };
+}
+
+async function runCompress() {
+  if (!cmpSource) return;
+  const runId = ++cmpRunId;
+  const type = cmpTargetType();
+  const lossy = CMP_LOSSY.indexOf(type) !== -1;
+  const size = cmpTargetSize();
+
+  cmpQuality.disabled = !lossy;
+  cmpHint.textContent = lossy
+    ? ''
+    : 'O PNG não tem qualidade regulável — passa a JPEG ou WebP para poupar mais.';
+
+  cmpSummary.hidden = false;
+  cmpSummary.className = 'cmp-summary is-working';
+  cmpSummary.textContent = 'A comprimir…';
+
+  const canvas = document.createElement('canvas');
+  canvas.width = size.width;
+  canvas.height = size.height;
+  const ctx = canvas.getContext('2d');
+  ctx.imageSmoothingQuality = 'high';
+  ctx.drawImage(cmpSource.bitmap, 0, 0, size.width, size.height);
+
+  const blob = await new Promise(res => canvas.toBlob(res, type, cmpQuality.value / 100));
+  if (runId !== cmpRunId) return; // já há um pedido mais recente
+  if (!blob) {
+    cmpSummary.hidden = true;
+    cmpError.textContent = 'Não foi possível gerar a imagem neste formato.';
+    return;
+  }
+
+  cmpError.textContent = '';
+  if (cmpResult && cmpResult.url) URL.revokeObjectURL(cmpResult.url);
+  cmpResult = { blob: blob, url: URL.createObjectURL(blob), width: size.width, height: size.height, type: type };
+
+  cmpLayerResult.style.backgroundImage = 'url("' + cmpResult.url + '")';
+  cmpPaintViewer();
+  cmpResultMeta.textContent = formatBytes(blob.size) + ' · ' + size.width + '×' + size.height +
+    ' · ' + cmpTypeName(type);
+
+  const diff = cmpSource.file.size - blob.size;
+  const pct = Math.round(Math.abs(diff) / cmpSource.file.size * 100);
+  const sizes = formatBytes(cmpSource.file.size) + ' → ' + formatBytes(blob.size);
+  if (diff > 0) {
+    cmpSummary.className = 'cmp-summary is-smaller';
+    cmpSummary.textContent = sizes + '  ·  menos ' + pct + '% (' + formatBytes(diff) + ' poupados)';
+  } else if (diff === 0) {
+    cmpSummary.className = 'cmp-summary';
+    cmpSummary.textContent = sizes + '  ·  o mesmo tamanho do original';
+  } else {
+    cmpSummary.className = 'cmp-summary is-bigger';
+    cmpSummary.textContent = sizes + '  ·  ' + (pct === 0 ? 'praticamente igual' : 'mais ' + pct + '%') +
+      ' — experimenta outro formato ou menos qualidade';
+  }
+}
+
+// As duas camadas usam o mesmo background-size/position, por isso o que está
+// debaixo da divisória é exatamente o mesmo pedaço da imagem nas duas versões.
+function cmpPaintViewer() {
+  if (!cmpSource) return;
+  const rect = cmpViewer.getBoundingClientRect();
+  if (!rect.width || !rect.height) return;
+
+  const iw = cmpSource.bitmap.width;
+  const ih = cmpSource.bitmap.height;
+  const scale = cmpScaleFor(rect);
+  const bw = iw * scale;
+  const bh = ih * scale;
+
+  // centrado, com o arrasto limitado ao que ainda mostra imagem
+  const restX = (rect.width - bw) / 2;
+  const restY = (rect.height - bh) / 2;
+  let x = restX + cmpPan.x;
+  let y = restY + cmpPan.y;
+  x = bw > rect.width ? Math.min(0, Math.max(rect.width - bw, x)) : restX;
+  y = bh > rect.height ? Math.min(0, Math.max(rect.height - bh, y)) : restY;
+  cmpPan = { x: x - restX, y: y - restY };
+
+  const size = Math.round(bw) + 'px ' + Math.round(bh) + 'px';
+  const pos = Math.round(x) + 'px ' + Math.round(y) + 'px';
+  [cmpLayerOriginal, cmpLayerResult].forEach(layer => {
+    layer.style.backgroundSize = size;
+    layer.style.backgroundPosition = pos;
+  });
+
+  cmpLayerOriginal.style.width = cmpSplit.value + '%';
+  cmpHandle.style.left = cmpSplit.value + '%';
+  cmpViewer.classList.toggle('is-zoomed', bw > rect.width + 1 || bh > rect.height + 1);
+  cmpView = { x: x, y: y, scale: scale };
+}
+
+function cmpFitScale(rect) {
+  return Math.min(rect.width / cmpSource.bitmap.width, rect.height / cmpSource.bitmap.height);
+}
+
+function cmpScaleFor(rect) {
+  const fit = cmpFitScale(rect);
+  if (cmpZoom.value === 'fit') return fit;
+  if (cmpZoom.value === 'custom') return Math.max(fit, Math.min(16, cmpCustomZoom));
+  return parseFloat(cmpZoom.value);
+}
+
+// O menu passa a mostrar a percentagem quando o zoom vem da roda do rato
+function cmpSetCustomZoom(scale) {
+  cmpCustomZoom = scale;
+  if (!cmpZoomOption) {
+    cmpZoomOption = document.createElement('option');
+    cmpZoomOption.value = 'custom';
+    cmpZoom.appendChild(cmpZoomOption);
+  }
+  cmpZoomOption.textContent = Math.round(scale * 100) + '%';
+  cmpZoom.value = 'custom';
+}
+
+cmpViewer.addEventListener('wheel', e => {
+  if (!cmpSource) return;
+  const rect = cmpViewer.getBoundingClientRect();
+  if (!rect.width || !cmpView) return;
+  e.preventDefault();
+
+  const fit = cmpFitScale(rect);
+  const step = Math.pow(1.18, e.deltaY < 0 ? 1 : -1);
+  const next = Math.max(fit, Math.min(16, cmpView.scale * step));
+
+  if (next <= fit + 0.0001) {
+    cmpZoom.value = 'fit';
+    cmpPan = { x: 0, y: 0 };
+    cmpPaintViewer();
+    return;
+  }
+
+  // o ponto da imagem debaixo do rato fica onde está
+  const cx = e.clientX - rect.left;
+  const cy = e.clientY - rect.top;
+  const u = (cx - cmpView.x) / cmpView.scale;
+  const v = (cy - cmpView.y) / cmpView.scale;
+  cmpPan.x = (cx - u * next) - (rect.width - cmpSource.bitmap.width * next) / 2;
+  cmpPan.y = (cy - v * next) - (rect.height - cmpSource.bitmap.height * next) / 2;
+
+  cmpSetCustomZoom(next);
+  cmpPaintViewer();
+}, { passive: false });
+
+function cmpSplitFromEvent(e) {
+  const rect = cmpViewer.getBoundingClientRect();
+  const pct = (e.clientX - rect.left) / rect.width * 100;
+  cmpSplit.value = Math.max(0, Math.min(100, Math.round(pct)));
+  cmpPaintViewer();
+}
+
+cmpViewer.addEventListener('pointerdown', e => {
+  if (!cmpSource) return;
+  e.preventDefault();
+  const onHandle = cmpHandle.contains(e.target);
+  cmpDrag = (onHandle || !cmpViewer.classList.contains('is-zoomed'))
+    ? { mode: 'split' }
+    : { mode: 'pan', x: e.clientX, y: e.clientY };
+  cmpViewer.setPointerCapture(e.pointerId);
+  if (cmpDrag.mode === 'split') cmpSplitFromEvent(e);
+  else cmpViewer.classList.add('is-panning');
+});
+
+cmpViewer.addEventListener('pointermove', e => {
+  if (!cmpDrag) return;
+  if (cmpDrag.mode === 'split') {
+    cmpSplitFromEvent(e);
+    return;
+  }
+  cmpPan.x += e.clientX - cmpDrag.x;
+  cmpPan.y += e.clientY - cmpDrag.y;
+  cmpDrag.x = e.clientX;
+  cmpDrag.y = e.clientY;
+  cmpPaintViewer();
+});
+
+['pointerup', 'pointercancel'].forEach(evt => {
+  cmpViewer.addEventListener(evt, () => {
+    cmpDrag = null;
+    cmpViewer.classList.remove('is-panning');
+  });
+});
+
+cmpSplit.addEventListener('input', cmpPaintViewer);
+// o visor mede-se a si próprio, por isso só pinta com a tab à vista
+document.querySelector('.tab-btn[data-tab="compress"]').addEventListener('click', cmpPaintViewer);
+cmpZoom.addEventListener('change', () => {
+  cmpPan = { x: 0, y: 0 };
+  cmpPaintViewer();
+});
+window.addEventListener('resize', cmpPaintViewer);
+
+function scheduleCompress() {
+  clearTimeout(cmpTimer);
+  cmpTimer = setTimeout(runCompress, 180);
+}
+
+cmpQuality.addEventListener('input', () => {
+  cmpQualityValue.textContent = cmpQuality.value;
+  scheduleCompress();
+});
+[cmpFormat, cmpMaxWidth].forEach(el => el.addEventListener('change', runCompress));
+
+cmpDrop.addEventListener('click', () => cmpInput.click());
+cmpDrop.addEventListener('keydown', e => {
+  if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); cmpInput.click(); }
+});
+cmpInput.addEventListener('change', () => loadCompressSource(cmpInput.files[0]));
+
+['dragenter', 'dragover'].forEach(evt => {
+  cmpDrop.addEventListener(evt, e => { e.preventDefault(); cmpDrop.classList.add('is-over'); });
+});
+['dragleave', 'drop'].forEach(evt => {
+  cmpDrop.addEventListener(evt, e => { e.preventDefault(); cmpDrop.classList.remove('is-over'); });
+});
+cmpDrop.addEventListener('drop', e => {
+  if (e.dataTransfer && e.dataTransfer.files.length) loadCompressSource(e.dataTransfer.files[0]);
+});
+
+document.getElementById('cmpDownloadBtn').addEventListener('click', () => {
+  if (!cmpResult) return;
+  const base = cmpSource.file.name.replace(/\.[^.]+$/, '') || 'imagem';
+  const link = document.createElement('a');
+  link.download = base + '-comprimido.' + cmpExtension(cmpResult.type);
+  link.href = cmpResult.url;
+  link.click();
+});
+
+document.getElementById('cmpResetBtn').addEventListener('click', () => {
+  cmpReset();
+  cmpInput.click();
+});
